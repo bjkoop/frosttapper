@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">FrostTapper</string>
+    <string name="accessibility_service_description">This service is used to perform clicks automatically for the FrostTapper app.</string>
+    <string name="accessibility_service_label">FrostTapper AutoClicker</string>
 </resources>
