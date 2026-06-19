@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -56,6 +57,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -77,13 +79,13 @@ class OverlayService : Service() {
     private var controllerView: ComposeView? = null
     private var targetView: ComposeView? = null
 
-    // Use a singleton-like state to ensure Compose and Service stay in sync
-    companion object {
-        var isRunning by mutableStateOf(false)
-        var interval by mutableIntStateOf(1000)
-        var targetX by mutableIntStateOf(500)
-        var targetY by mutableIntStateOf(1000)
-    }
+    // Use member variables with mutableStateOf to ensure they are tracked by Compose
+    private var isRunning by mutableStateOf(false)
+    private var interval by mutableIntStateOf(1000)
+    private var targetX by mutableIntStateOf(500)
+    private var targetY by mutableIntStateOf(1000)
+    private var controllerX by mutableIntStateOf(0)
+    private var controllerY by mutableIntStateOf(150)
 
     private val handler = Handler(Looper.getMainLooper())
     private val clickRunnable = object : Runnable {
@@ -141,21 +143,38 @@ class OverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 150
+            x = controllerX
+            y = controllerY
         }
 
         controllerView = ComposeView(this).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setupComposeLayout(this)
             setContent {
                 ControllerUI(
-                    onClose = {
-                        stopSelf()
-                    },
+                    currentIsRunning = isRunning,
+                    currentInterval = interval,
+                    onClose = { stopSelf() },
                     onToggle = {
                         isRunning = !isRunning
-                        if (isRunning) handler.post(clickRunnable)
-                        else handler.removeCallbacks(clickRunnable)
+                        if (isRunning) {
+                            handler.removeCallbacks(clickRunnable)
+                            handler.post(clickRunnable)
+                        } else {
+                            handler.removeCallbacks(clickRunnable)
+                        }
+                    },
+                    onMove = { dx, dy ->
+                        controllerX += dx
+                        controllerY += dy
+                        params.x = controllerX
+                        params.y = controllerY
+                        windowManager.updateViewLayout(this, params)
+                    },
+                    onIntervalChange = { delta ->
+                        if (interval + delta >= 50) {
+                            interval += delta
+                        }
                     }
                 )
             }
@@ -177,6 +196,7 @@ class OverlayService : Service() {
         }
 
         targetView = ComposeView(this).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setupComposeLayout(this)
             setContent {
                 TargetUI(
@@ -185,7 +205,7 @@ class OverlayService : Service() {
                         targetY += dy
                         params.x = targetX - 30.dpToPx()
                         params.y = targetY - 30.dpToPx()
-                        windowManager.updateViewLayout(targetView, params)
+                        windowManager.updateViewLayout(this, params)
                     }
                 )
             }
@@ -207,6 +227,7 @@ class OverlayService : Service() {
         }
 
         val view = ComposeView(this).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setupComposeLayout(this)
             setContent {
                 var visible by remember { mutableStateOf(true) }
@@ -226,7 +247,7 @@ class OverlayService : Service() {
                         )
                 )
                 
-                Handler(Looper.getMainLooper()).postDelayed({ visible = false }, 50)
+                handler.postDelayed({ visible = false }, 50)
             }
         }
         windowManager.addView(view, params)
@@ -238,76 +259,107 @@ class OverlayService : Service() {
     }
 
     @Composable
-    private fun ControllerUI(onClose: () -> Unit, onToggle: () -> Unit) {
+    private fun ControllerUI(
+        currentIsRunning: Boolean,
+        currentInterval: Int,
+        onClose: () -> Unit,
+        onToggle: () -> Unit,
+        onMove: (Int, Int) -> Unit,
+        onIntervalChange: (Int) -> Unit
+    ) {
         MaterialTheme {
             Card(
-                modifier = Modifier.padding(8.dp),
+                modifier = Modifier
+                    .padding(8.dp)
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            onMove(dragAmount.x.toInt(), dragAmount.y.toInt())
+                        }
+                    },
                 shape = RoundedCornerShape(16.dp),
                 elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF2C2C2C))
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A))
             ) {
                 Column(
-                    modifier = Modifier.padding(10.dp),
+                    modifier = Modifier.padding(12.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // Drag handle
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(10.dp)
+                            .padding(bottom = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp, 4.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.2f))
+                        )
+                    }
+
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         IconButton(
                             onClick = onToggle,
                             modifier = Modifier
-                                .size(44.dp)
+                                .size(48.dp)
                                 .clip(CircleShape)
-                                .background(if (isRunning) Color(0xFFE53935) else Color(0xFF43A047))
+                                .background(if (currentIsRunning) Color(0xFFD32F2F) else Color(0xFF388E3C))
                         ) {
                             Icon(
-                                if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                if (currentIsRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
                                 contentDescription = "Play/Stop",
                                 tint = Color.White,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(32.dp)
                             )
                         }
 
                         IconButton(
                             onClick = onClose, 
                             modifier = Modifier
-                                .size(44.dp)
+                                .size(48.dp)
                                 .clip(CircleShape)
-                                .background(Color.Gray.copy(alpha = 0.3f))
+                                .background(Color.White.copy(alpha = 0.1f))
                         ) {
                             Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color.Black.copy(alpha = 0.3f))
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White.copy(alpha = 0.05f))
+                            .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
                             .padding(4.dp)
                     ) {
                         IconButton(
-                            onClick = { if (interval > 50) interval -= 50 },
-                            modifier = Modifier.size(32.dp)
+                            onClick = { onIntervalChange(-50) },
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(Icons.Default.Remove, contentDescription = "Decrease", tint = Color.White)
                         }
 
                         Text(
-                            text = "${interval}ms",
+                            text = "${currentInterval}ms",
                             color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            modifier = Modifier.padding(horizontal = 8.dp)
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.padding(horizontal = 12.dp)
                         )
 
                         IconButton(
-                            onClick = { interval += 50 },
-                            modifier = Modifier.size(32.dp)
+                            onClick = { onIntervalChange(50) },
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(Icons.Default.Add, contentDescription = "Increase", tint = Color.White)
                         }
@@ -331,29 +383,44 @@ class OverlayService : Service() {
                 .background(Color.Transparent),
             contentAlignment = Alignment.Center
         ) {
-            // Outter ring
+            // High contrast Zebra Outer Ring
             Box(
                 modifier = Modifier
-                    .size(50.dp)
-                    .border(2.dp, Color.Cyan, CircleShape)
-                    .background(Color.Cyan.copy(alpha = 0.15f))
+                    .size(56.dp)
+                    .border(4.dp, Color.Black, CircleShape)
             )
-            // Inner circle
             Box(
                 modifier = Modifier
-                    .size(20.dp)
+                    .size(52.dp)
+                    .border(2.dp, Color.White, CircleShape)
+            )
+            
+            // Outer semi-transparent glow
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .border(2.dp, Color.Cyan, CircleShape)
+                    .background(Color.Cyan.copy(alpha = 0.1f))
+            )
+            
+            // Inner target dot with contrast border
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .border(2.dp, Color.Black, CircleShape)
                     .clip(CircleShape)
                     .background(
                         Brush.radialGradient(
                             colors = listOf(Color.White, Color.Cyan)
                         )
                     )
-                    .border(1.dp, Color.White, CircleShape)
             )
-            // Center dot
+            
+            // Precision Red Center
             Box(
                 modifier = Modifier
-                    .size(4.dp)
+                    .size(6.dp)
+                    .border(1.dp, Color.White, CircleShape)
                     .clip(CircleShape)
                     .background(Color.Red)
             )
@@ -366,6 +433,8 @@ class OverlayService : Service() {
         val lifecycleOwner = MyLifecycleOwner()
         lifecycleOwner.performRestore(null)
         lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+        lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_START)
+        lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         view.setViewTreeLifecycleOwner(lifecycleOwner)
         view.setViewTreeViewModelStoreOwner(object : ViewModelStoreOwner {
             override val viewModelStore: ViewModelStore = ViewModelStore()
